@@ -1,0 +1,15 @@
+[project]
+name = "binance-futures-trader"
+version = "0.1.0"
+description = "Local BTC/ETH Binance USD-M futures console with an hourly trend/range strategy"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "GPL-3.0-only"
+authors = [{name = "TTTAAXXTTT"}]
+
+[project.urls]
+Repository = "https://github.com/TTTAAXXTTT/binance-futures-trader"
+Issues = "https://github.com/TTTAAXXTTT/binance-futures-trader/issues"
+
+# This is a source checkout application. Install requirements.txt and run the
+# launch scripts; no wheel or pip-installable application package is published.

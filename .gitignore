@@ -1,0 +1,37 @@
+# Credentials and local state
+.env
+.env.*
+!.env.example
+user_data/**
+!user_data/.gitkeep
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite*
+*.db
+*.log
+# Environments and dependencies
+.venv/
+venv/
+runtime/
+node_modules/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage*
+htmlcov/
+# Generated reports, private deployment material and archives
+reports/**
+!reports/.gitkeep
+server/patch-backups/
+server/pending-patches/
+server/migration-evidence/
+archive/
+*.zip
+*.7z
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
