@@ -1,0 +1,19 @@
+name: 问题报告
+description: 报告可重现的问题，请勿上传密钥、账户资料或日志原文。
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期与实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 重现步骤（仅脱敏示例）
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Windows、Python 和项目版本
