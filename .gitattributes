@@ -1,16 +1,2 @@
-* text=auto
-*.py text eol=lf
-*.md text eol=lf
-*.yml text eol=lf
-*.json text eol=lf
-*.vue text eol=lf
-*.ts text eol=lf
-*.mjs text eol=lf
-*.ps1 text eol=crlf
-*.cmd text eol=crlf
-*.js text eol=lf
-*.css text eol=lf
-*.html text eol=lf
-*.toml text eol=lf
-*.txt text eol=lf
-.env.example text eol=lf
+# Preserve source bytes on checkout; the runtimes accept both LF and CRLF.
+* -text
