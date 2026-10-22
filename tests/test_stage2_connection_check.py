@@ -94,9 +94,24 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual(self.client.calls[7][2]['client_id'],'original-entry')
         self.assertEqual(self.client.calls[8][1]['algo_id'],123)
     def test_timeout_keeps_inflight_coalesced_and_discards_late_success(self):
-        self.checker.deadline_seconds=.05
-        block=threading.Event(); self.client.wait=block
-        response=self.checker.request(); time.sleep(.08)
+        # Advance a controlled deadline only after the account request entered.
+        # Real sleeps can expire before the worker starts on a busy Windows runner.
+        now=[0.0]
+        self.checker.monotonic=lambda:now[0]
+        self.checker.deadline_seconds=30
+        block=threading.Event(); entered=threading.Event()
+        def blocked_account():
+            self.client.calls.append('account')
+            entered.set()
+            if not block.wait(30):
+                raise TimeoutError('test account request was not released')
+            return {}
+        self.client.account=blocked_account
+        self.addCleanup(block.set)
+        response=self.checker.request()
+        self.assertTrue(entered.wait(5))
+        now[0]=31.0
+        self.checker._expire(response['connection_check']['id'])
         self.assertEqual(self.checker.snapshot()['state'],'failed')
         self.assertTrue(self.checker.request()['merged'])
         block.set(); result=self.finish()
@@ -162,3 +177,4 @@ class RecoveryNotificationTests(unittest.TestCase):
         before=self.engine._recovery_next_probe
         self.assertFalse(self.engine.accept_connection_check(self.notice()))
         self.assertEqual(before,self.engine._recovery_next_probe)
+
