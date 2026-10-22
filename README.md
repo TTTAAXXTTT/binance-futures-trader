@@ -1,5 +1,13 @@
 # Binance Futures Trader
 
+<!-- portable-download:start -->
+## 直接下载使用
+
+**[下载 Windows x64 便携版 v0.1.0](https://github.com/TTTAAXXTTT/binance-futures-trader/releases/download/v0.1.0/binance-futures-trader-Windows-x64-v0.1.0.zip)** · [发布说明与 SHA-256 校验](https://github.com/TTTAAXXTTT/binance-futures-trader/releases/tag/v0.1.0)
+
+完整解压后使用包内启动 CMD，无需安装 Python 或 Node。包内包含运行环境、应用依赖、源码和使用说明。账号、模型 API 及设备仍需自行配置。
+<!-- portable-download:end -->
+
 币安 BTC / ETH USDT 本位永续合约交易台，提供中文界面、1 小时趋势突破与震荡回归策略、独立策略账本和 Windows 进程监督。
 
 初始开源版本基于 `2026-10-15-editable-strategy-equity-v9`。运行平台为 **Windows x64 + Python 3.12**；前端为 Vue 3。仓库包含可重建的前端源码和已构建页面。启动控制台无需 Node.js，修改前端需要 Node.js 22.12+ 与 npm。
