@@ -87,6 +87,9 @@ jobs:
           else:
               tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
               for relative in filter(None, tracked):
+                  if not (BASE / relative).is_file() and relative.startswith('frequi/dist/'):
+                      # Vite replaces content-hashed files; only package the rebuilt output.
+                      continue
                   target = dest / relative
                   target.parent.mkdir(parents=True, exist_ok=True)
                   shutil.copy2(BASE / relative, target)
