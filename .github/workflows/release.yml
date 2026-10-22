@@ -1,0 +1,197 @@
+name: Publish verified portable release
+on:
+  push:
+    paths:
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: portable-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: '1'
+      RELEASE_REPO: binance-futures-trader
+      RELEASE_VERSION: v0.1.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.20.0'
+      - name: Test the release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -r requirements-dev.txt
+          npm ci --prefix frequi/quant
+          npm run build --prefix frequi/quant
+          node frequi/quant/verify-connection-check.mjs
+          python tools/check_publication.py
+          python -X utf8 tools/verify_hourly.py
+      - name: Build and smoke-test the self-contained runtime
+        shell: bash
+        run: |
+          python - <<'PY'
+          """Build a self-contained Windows release from a clean checkout."""
+          import compileall, hashlib, json, os, shutil, subprocess, sys, tempfile, time, urllib.request, zipfile
+          from pathlib import Path
+
+          REPO = os.environ['RELEASE_REPO']
+          VERSION = os.environ['RELEASE_VERSION']
+          BASE = Path.cwd()
+          OUT = BASE / 'release'
+          OUT.mkdir(exist_ok=True)
+
+          def run(*args, cwd=None, env=None, timeout=600):
+              subprocess.run([str(x) for x in args], cwd=cwd or BASE, env=env, check=True, timeout=timeout)
+
+          def download(url, destination):
+              req = urllib.request.Request(url, headers={'User-Agent': 'release-builder'})
+              with urllib.request.urlopen(req, timeout=120) as response, destination.open('wb') as target:
+                  shutil.copyfileobj(response, target)
+
+          source = BASE
+          if REPO == 'chat-persona-lab':
+              archive = BASE / 'chat-persona-lab-v0.1.0-source.zip'
+              expected = next(line.split()[0] for line in (BASE / 'SHA256SUMS.txt').read_text().splitlines() if archive.name in line)
+              assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected
+              source = BASE / 'unpacked' / REPO
+              with zipfile.ZipFile(archive) as z:
+                  z.extractall(BASE / 'unpacked')
+
+          name = REPO + '-Windows-x64-' + VERSION
+          dest = OUT / name
+          dest.mkdir()
+          if source != BASE:
+              shutil.copytree(source, dest, dirs_exist_ok=True)
+          else:
+              tracked = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+              for relative in filter(None, tracked):
+                  target = dest / relative
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(BASE / relative, target)
+
+          runtime = dest / 'runtime' / 'python'
+          packages = dest / 'runtime' / 'packages'
+          runtime.mkdir(parents=True)
+          packages.mkdir()
+          python_zip = OUT / 'python-3.12.10-embed-amd64.zip'
+          download('https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip', python_zip)
+          with zipfile.ZipFile(python_zip) as z:
+              z.extractall(runtime)
+          (runtime / 'python312._pth').write_text('python312.zip\n.\n../packages\n../..\nimport site\n', encoding='ascii')
+          provenance = {'repository': REPO, 'version': VERSION, 'commit': os.environ['GITHUB_SHA'],
+                        'python': '3.12.10', 'python_zip_sha256': hashlib.sha256(python_zip.read_bytes()).hexdigest()}
+          if (source / 'requirements.txt').is_file():
+              run(sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-compile', '--target', packages, '-r', source / 'requirements.txt', cwd=source)
+          python = runtime / 'python.exe'
+          clean_env = {k: v for k, v in os.environ.items() if k not in {'PYTHONHOME', 'PYTHONPATH'}}
+          clean_env['PYTHONUTF8'] = '1'
+          clean_env['PYTHONNOUSERSITE'] = '1'
+
+          def cmd(filename, body):
+              (dest / filename).write_text('@echo off\r\nchcp 65001 >nul\r\ncd /d "%~dp0"\r\nset "PATH=%~dp0runtime\\python;%~dp0tools\\ffmpeg;%PATH%"\r\n' + body.replace('\n', '\r\n') + '\r\n', encoding='utf-8')
+
+          def smoke_http(arguments, url, expected, cwd=dest):
+              log = OUT / ('smoke-' + REPO + '.log')
+              with log.open('w', encoding='utf-8') as stream:
+                  process = subprocess.Popen([str(x) for x in arguments], cwd=cwd, env=clean_env, stdout=stream, stderr=subprocess.STDOUT)
+                  try:
+                      for _ in range(60):
+                          if process.poll() is not None:
+                              raise RuntimeError(log.read_text())
+                          try:
+                              with urllib.request.urlopen(url, timeout=2) as response:
+                                  body = response.read().decode('utf-8')
+                              assert expected in body
+                              return
+                          except (OSError, TimeoutError):
+                              time.sleep(.5)
+                      raise RuntimeError('Portable HTTP startup timed out: ' + log.read_text())
+                  finally:
+                      process.terminate()
+                      process.wait(timeout=20)
+
+          if REPO == 'binance-futures-trader':
+              shutil.copytree(BASE / 'frequi/dist', dest / 'frequi/dist', dirs_exist_ok=True)
+              cmd('启动交易台.cmd', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0server\\Start-Server.ps1"\nif errorlevel 1 pause')
+              cmd('停止本目录服务.cmd', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0server\\Stop-Server.ps1"\npause')
+              run(python, '-E', '-X', 'utf8', dest / 'server/preflight.py', cwd=dest, env=clean_env)
+              smoke_http([python, dest / 'run.py'], 'http://127.0.0.1:8788/api/status', 'HourlyTrendRange')
+              # Smoke testing must not put runtime state or generated credentials in a release.
+              for relative in ['user_data', 'reports']:
+                  target = dest / relative
+                  assert target.is_relative_to(dest)
+                  shutil.rmtree(target, ignore_errors=True)
+                  target.mkdir()
+              instructions = '完整解压，双击“启动交易台.cmd”。无需安装 Python/Node。首次启动请在本机配置 API。默认不自动开仓；真实策略仍须人工启用。停止服务请用“停止本目录服务.cmd”。本包保留原有进程监督及恢复行为，使用前阅读 README 和风险说明。'
+          elif REPO == 'dingtalk-report-panel':
+              run('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', dest / 'setup_dws.ps1', cwd=dest)
+              cmd('01_首次使用.cmd', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0login_dingtalk.ps1"\nif errorlevel 1 (pause & exit /b 1)\npowershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1"\npause')
+              cmd('02_日常启动.cmd', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1"\npause')
+              cmd('03_重新登录钉钉.cmd', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0login_dingtalk.ps1"\npause')
+              cmd('04_演示模式.cmd', 'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start.ps1" -FixtureMode\npause')
+              clean_env['DINGTALK_REPORT_MODE'] = 'fixture'
+              clean_env['DINGTALK_REPORT_DATA_DIR'] = str(OUT / 'smoke-data')
+              smoke_http([python, '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '18765'], 'http://127.0.0.1:18765/', '<html')
+              shutil.rmtree(dest / 'data', ignore_errors=True)
+              instructions = '完整解压后，先双击“04_演示模式.cmd”查看虚构数据。真实使用双击“01_首次使用.cmd”登录钉钉，之后用“02_日常启动.cmd”。已包含 Python、网页和固定版本 DWS，无需另行安装编程环境。生成真实报告仍需你登录自己的钉钉并在面板填写模型配置。'
+          elif REPO == 'chat-persona-lab':
+              cmd('01_离线体验.cmd', '"%~dp0runtime\\python\\python.exe" -E -X utf8 scripts\\create_demo.py\nif errorlevel 1 (pause & exit /b 1)\nstart "" http://127.0.0.1:8765\n"%~dp0runtime\\python\\python.exe" -E -X utf8 -m persona_agent --offline-fake-model\npause')
+              cmd('02_配置模型后启动.cmd', '"%~dp0runtime\\python\\python.exe" -E -X utf8 -m persona_agent\npause')
+              run(python, dest / 'scripts/create_demo.py', cwd=dest, env=clean_env)
+              run(python, '-m', 'persona_agent', '--analyze-only', cwd=dest, env=clean_env)
+              smoke_http([python, '-m', 'persona_agent', '--offline-fake-model'], 'http://127.0.0.1:8765/', '<html')
+              shutil.rmtree(dest / 'data', ignore_errors=True)
+              (dest / '.env').unlink(missing_ok=True)
+              instructions = '完整解压后双击“01_离线体验.cmd”，使用虚构聊天和离线固定模型，默认不发送任何消息。配置自己的资料和模型后用“02_配置模型后启动.cmd”。已自带 Python；无需安装。微信桌面适配器属于另行安装并验证的可选实验集成，本便携包提供完整核心分析和回复草稿功能。'
+          elif REPO == 'video-editing-workflow':
+              shutil.copytree(BASE / 'ffmpeg-artifact', dest / 'tools/ffmpeg')
+              (dest / 'portable_video.py').write_text('''import os,runpy,sys\nfrom pathlib import Path\nroot=Path(__file__).resolve().parent\nos.environ['PATH']=str(root/'tools/ffmpeg')+os.pathsep+os.environ.get('PATH','')\ncommands={'grid':'make_grid.py','clips':'make_clips.py','join':'join.py','verify':'verify_final.py'}\nif len(sys.argv)<2 or sys.argv[1] not in commands:\n print('Usage: VideoWorkflow.cmd grid|clips|join|verify [arguments]');raise SystemExit(2)\nscript=root/'scripts'/commands[sys.argv[1]]\nsys.argv=[str(script)]+sys.argv[2:]\nrunpy.run_path(str(script),run_name='__main__')\n''', encoding='utf-8')
+              cmd('VideoWorkflow.cmd', '"%~dp0runtime\\python\\python.exe" -E -X utf8 "%~dp0portable_video.py" %*\nif errorlevel 1 pause')
+              for executable in ['ffmpeg.exe', 'ffprobe.exe']:
+                  run(dest / 'tools/ffmpeg' / executable, '-version')
+              scratch = OUT / 'video-smoke'
+              scratch.mkdir()
+              ff = dest / 'tools/ffmpeg/ffmpeg.exe'
+              run(ff, '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=10', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', scratch / 'sample.mp4')
+              (scratch / 'shots.json').write_text('[{"file":"sample.mp4","start":0}]')
+              clean_env['PATH'] = str(dest / 'tools/ffmpeg') + os.pathsep + clean_env.get('PATH', '')
+              run(python, dest / 'portable_video.py', 'clips', '--src', scratch, '--work', scratch / 'clips', '--shots', scratch / 'shots.json', '--duration', '1', '--width', '320', '--height', '180', '--fps', '10', '--preset', 'ultrafast', cwd=dest, env=clean_env)
+              run(python, dest / 'portable_video.py', 'verify', scratch / 'clips/c00.mp4', scratch / 'check.jpg', cwd=dest, env=clean_env)
+              assert (scratch / 'check.jpg').is_file()
+              instructions = '完整解压。本包自带 Windows x64 Python、Pillow、FFmpeg 和 FFprobe，打开终端运行 VideoWorkflow.cmd grid|clips|join|verify 加 README 中对应参数。例：VideoWorkflow.cmd grid footage grid.jpg。无需安装编程环境或 FFmpeg。tools/ffmpeg/sources 包含对应 FFmpeg、x264 源码，构建配置位于仓库发布工作流。'
+          else:
+              raise RuntimeError(REPO)
+
+          (dest / '使用说明-先读.txt').write_text(instructions + '\n\n保留 runtime 目录，勿只复制启动文件。请在有写入权限的目录完整解压。\n', encoding='utf-8-sig')
+          (dest / 'BUILD-INFO.json').write_text(json.dumps(provenance, indent=2), encoding='utf-8')
+          run(python, '-m', 'compileall', '-q', dest, cwd=dest, env=clean_env)
+          run(python, '-m', 'pip', '--version', cwd=dest, env=clean_env) if False else None
+          with zipfile.ZipFile(OUT / (name + '.zip'), 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+              for file in dest.rglob('*'):
+                  if file.is_file():
+                      z.write(file, file.relative_to(OUT))
+          digest = hashlib.sha256((OUT / (name + '.zip')).read_bytes()).hexdigest()
+          (OUT / 'SHA256SUMS.txt').write_text(digest + '  ' + name + '.zip\n', encoding='ascii')
+          print('VERIFIED PORTABLE RELEASE:', name + '.zip', digest)
+          PY
+      - name: Publish verified download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view v0.1.0 >/dev/null 2>&1; then
+            gh release create v0.1.0 --target "$GITHUB_SHA" --draft --title "币安合约交易台 v0.1.0 · Windows 便携版" --notes '下载 binance-futures-trader-Windows-x64-v0.1.0.zip 并完整解压。已包含 Windows x64 Python 运行环境及应用依赖，不需要安装 Python/Node。使用根目录启动 CMD，详见包内“使用说明-先读.txt”。经过源码回归与包内运行时启动核验；账号、模型及设备依赖仍由使用者配置。 新包不带 API 密钥、交易记录或启用状态；真实交易须自行配置并主动启用。'
+          fi
+          gh release upload v0.1.0 release/binance-futures-trader-Windows-x64-v0.1.0.zip release/SHA256SUMS.txt --clobber
+          gh release edit v0.1.0 --draft=false --latest
