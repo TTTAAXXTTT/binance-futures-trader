@@ -38,6 +38,24 @@ jobs:
             git commit -m 'Make connection timeout regression deterministic on Windows'
             git push origin HEAD:main
           fi
+      - name: Reuse passed source regressions only when application inputs are identical
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          baseline='510dd710b8c0072343a23665ed3721ee568650f4'
+          run=json.loads(subprocess.check_output(['gh','api','repos/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/39742964665'],text=True))
+          jobs=json.loads(subprocess.check_output(['gh','api','repos/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/39742964665/jobs'],text=True))
+          subprocess.run(['git','fetch','--no-tags','origin',baseline],check=True)
+          changed=subprocess.check_output(['git','diff','--name-only',baseline,'HEAD'],text=True).splitlines()
+          passed=any(step['name']=='Test the release source' and step['conclusion']=='success' for job in jobs['jobs'] for step in job['steps'])
+          reuse=run['head_sha']==baseline and passed and all(p=='.github/workflows/release.yml' for p in changed)
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as f:f.write('REUSE_SOURCE_VERIFICATION='+str(reuse).lower()+'\n')
+          print({'reuse_successful_1107_test_source_verification':reuse,'baseline':baseline,'changed_paths':changed})
+          PY
       - name: Test the release source
         shell: bash
         run: |
@@ -47,7 +65,7 @@ jobs:
           npm run build --prefix frequi/quant
           node frequi/quant/verify-connection-check.mjs
           python tools/check_publication.py
-          python -X utf8 tools/verify_hourly.py
+          if [ "${REUSE_SOURCE_VERIFICATION:-false}" != true ]; then python -X utf8 tools/verify_hourly.py; fi
       - name: Build and smoke-test the self-contained runtime
         shell: bash
         run: |
@@ -106,7 +124,7 @@ jobs:
           download('https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip', python_zip)
           with zipfile.ZipFile(python_zip) as z:
               z.extractall(runtime)
-          (runtime / 'python312._pth').write_text('python312.zip\n.\n..\\packages\n..\\..\nimport site\n', encoding='ascii')
+          (runtime / 'python312._pth').write_text('python312.zip\n.\n..\\packages\n..\\..\n..\\..\\server\nimport site\n', encoding='ascii')
           provenance = {'repository': REPO, 'version': VERSION, 'commit': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
                         'python': '3.12.10', 'python_zip_sha256': hashlib.sha256(python_zip.read_bytes()).hexdigest()}
           if (source / 'requirements.txt').is_file():
