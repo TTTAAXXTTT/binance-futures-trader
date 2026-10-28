@@ -3,7 +3,7 @@
 <!-- portable-download:start -->
 ## 直接下载使用
 
-**[下载 Windows x64 便携版 v0.1.0](https://github.com/TTTAAXXTTT/binance-futures-trader/releases/download/v0.1.0/binance-futures-trader-Windows-x64-v0.1.0.zip)** · [发布说明与 SHA-256 校验](https://github.com/TTTAAXXTTT/binance-futures-trader/releases/tag/v0.1.0)
+**[下载 Windows x64 便携版 v0.1.1](https://github.com/TTTAAXXTTT/binance-futures-trader/releases/download/v0.1.1/binance-futures-trader-Windows-x64-v0.1.1.zip)** · [发布说明与 SHA-256 校验](https://github.com/TTTAAXXTTT/binance-futures-trader/releases/tag/v0.1.1)
 
 完整解压后使用包内启动 CMD，无需安装 Python 或 Node。包内包含运行环境、应用依赖、源码和使用说明。账号、模型 API 及设备仍需自行配置。
 <!-- portable-download:end -->
