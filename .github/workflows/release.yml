@@ -16,7 +16,7 @@ jobs:
     env:
       PYTHONUTF8: '1'
       RELEASE_REPO: binance-futures-trader
-      RELEASE_VERSION: v0.1.0
+      RELEASE_VERSION: v0.1.1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -90,7 +90,7 @@ jobs:
 
           source = BASE
           if REPO == 'chat-persona-lab':
-              archive = BASE / 'chat-persona-lab-v0.1.0-source.zip'
+              archive = BASE / 'chat-persona-lab-v0.1.1-source.zip'
               expected = next(line.split()[0] for line in (BASE / 'SHA256SUMS.txt').read_text().splitlines() if archive.name in line)
               assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected
               source = BASE / 'unpacked' / REPO
@@ -230,11 +230,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh release view v0.1.0 >/dev/null 2>&1; then
-            gh release create v0.1.0 --target "$(git rev-parse HEAD)" --draft --title "币安合约交易台 v0.1.0 · Windows 便携版" --notes '下载 binance-futures-trader-Windows-x64-v0.1.0.zip 并完整解压。已包含 Windows x64 Python 运行环境及应用依赖，不需要安装 Python/Node。使用根目录启动 CMD，详见包内“使用说明-先读.txt”。经过源码回归与包内运行时启动核验；账号、模型及设备依赖仍由使用者配置。 新包不带 API 密钥、交易记录或启用状态；真实交易须自行配置并主动启用。'
+          if ! gh release view v0.1.1 >/dev/null 2>&1; then
+            gh release create v0.1.1 --target "$(git rev-parse HEAD)" --draft --title "币安合约交易台 v0.1.1 · Windows 便携版" --notes '下载 binance-futures-trader-Windows-x64-v0.1.1.zip 并完整解压。已包含 Windows x64 Python 运行环境及应用依赖，不需要安装 Python/Node。使用根目录启动 CMD，详见包内“使用说明-先读.txt”。经过源码回归与包内运行时启动核验；账号、模型及设备依赖仍由使用者配置。 新包不带 API 密钥、交易记录或启用状态；真实交易须自行配置并主动启用。'
           fi
-          gh release upload v0.1.0 release/binance-futures-trader-Windows-x64-v0.1.0.zip release/SHA256SUMS.txt --clobber
-          gh release edit v0.1.0 --draft=false --latest
+          gh release upload v0.1.1 release/binance-futures-trader-Windows-x64-v0.1.1.zip release/SHA256SUMS.txt --clobber
+          gh release edit v0.1.1 --draft=false --latest
       - name: Add the tested download to the project home page
         shell: bash
         run: |

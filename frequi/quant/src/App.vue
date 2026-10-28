@@ -3,6 +3,7 @@ import {ref,reactive,computed,onMounted,onUnmounted} from 'vue';
 import {createStatusReader} from './statusReader.mjs';
 import {createConnectionCheckSender,newerConnectionCheck,checkStateLabels,checkStageLabels,checkPartLabel} from './connectionCheck.mjs';
 import {createEquityEditor,emptyEquityEdits} from './equityEditor.mjs';
+const authorDialog=ref<HTMLDialogElement|null>(null);
 const equityEdits=reactive<any>(emptyEquityEdits());
 const equityEditor=createEquityEditor({states:equityEdits,storage:{getItem:(k:string)=>localStorage.getItem(k),setItem:(k:string,v:string)=>localStorage.setItem(k,v),removeItem:(k:string)=>localStorage.removeItem(k)}});
 const snapshot=ref<any>(null),tab=ref('总览'),notice=ref(''),error=ref(''),busy=ref(false),online=ref(false);
@@ -61,7 +62,7 @@ function eventText(e:any){const d=e.details||{};return [e.message||e.reason||e.t
 function entryReason(s:string){const m=market(s);if(!symbolChoice.value[s as 'BTCUSDT'|'ETHUSDT'])return '此品种新开仓已关闭';if(!running.value)return '新开仓尚未启动';if(!m.ready)return '等待1,000根完整小时线预热';if(!m.direction)return `${branch(m.branch)}条件未同时满足，等待下一小时收盘`;if(!m.signal_valid_now)return '信号窗口已结束，等待下一小时收盘';return '本小时存在信号，执行结果请查看运行事件';}
 async function setupCredentials(){busy.value=true;statusReader.invalidate();error.value='';try{const r=await api('setup','POST',{confirmed:true,api_key:apiKey.value,api_secret:apiSecret.value});apiKey.value='';apiSecret.value='';notice.value=r.message;await refresh();}catch(e:any){error.value=e.message;}finally{busy.value=false;}}
 
-onMounted(()=>{refresh();timer=setInterval(()=>{if(!busy.value)refresh();},5000);});onUnmounted(()=>{clearInterval(timer);statusReader.invalidate();});
+onMounted(()=>{authorDialog.value?.showModal();refresh();timer=setInterval(()=>{if(!busy.value)refresh();},5000);});onUnmounted(()=>{clearInterval(timer);statusReader.invalidate();});
 </script>
 <template>
 <div class="shell">
@@ -84,10 +85,23 @@ onMounted(()=>{refresh();timer=setInterval(()=>{if(!busy.value)refresh();},5000)
     <template v-if="tab==='交易记录'"><section class="panel"><div class="panel-heading"><h2>新小时策略登记记录</h2><button class="text-button" @click="action('exit-all')" :disabled="busy||!online||!worker.connected||!worker.trades?.length">新策略平仓并暂停</button></div><div class="table-wrap"><table><thead><tr><th>编号</th><th>合约</th><th>分支</th><th>方向</th><th>数量</th><th>均价</th><th>有效止损</th><th>预算消耗</th><th>状态</th></tr></thead><tbody><tr v-for="t in worker.history||worker.trades||[]"><td>{{t.trade_id||t.id||'—'}}</td><td>{{t.symbol||t.pair}}</td><td>{{branch(t.branch)}}</td><td>{{direction(t.direction??(t.is_short?-1:1))}}</td><td>{{f(t.quantity??t.q??t.amount,5)}}</td><td>{{f(t.average??t.entry_price??t.avg_price??t.avg)}}</td><td>{{f(t.confirmed_stop??t.stop_price??t.stop)}}</td><td>{{f(t.actual_cost??t.cost_actual??t.consumed_budget??t.cost)}}</td><td>{{t.exit_reason||t.status||t.phase||'持仓中'}}</td></tr><tr v-if="!(worker.history||worker.trades||[]).length"><td colspan="8" class="empty">新策略暂无登记交易。</td></tr></tbody></table></div></section><section v-if="oldPresent||(old.history||[]).length" class="panel"><div class="panel-heading"><h2>旧引擎历史与过渡记录</h2><span class="version">保留账本 · 不作为新策略收益</span></div><div class="table-wrap"><table><thead><tr><th>编号</th><th>品种</th><th>方向</th><th>保证金</th><th>杠杆</th><th>净盈亏</th><th>退出原因</th></tr></thead><tbody><tr v-for="t in old.history||old.trades||[]"><td>{{t.trade_id}}</td><td>{{t.pair}}</td><td>{{t.is_short?'做空':'做多'}}</td><td>{{f(t.stake_amount)}}</td><td>{{t.leverage}}倍</td><td>{{f(t.profit_abs)}}</td><td>{{oldExitReason(t.exit_reason)}}</td></tr></tbody></table></div></section></template>
     <section v-if="tab==='策略说明'" class="panel strategy"><div class="panel-heading"><h2>趋势突破＋震荡回归</h2><a class="text-button" href="/api/strategy-spec" target="_blank">完整新策略说明 →</a></div><div class="strategy-grid"><article><span>01 / 严格突破</span><h3>ADX14划分趋势与震荡</h3><p>ADX≥20用EMA50＋此前12小时严格突破；ADX&lt;20用SMA30±1.5倍总体标准差、RSI14多&lt;45空&gt;55，距中轨/收盘严格&gt;.2%。每笔分支冻结。</p></article><article><span>02 / 一次信号</span><h3>收盘后前5分钟执行</h3><p>新小时边界确认空仓、无未定订单才允许开仓。同一信号最多一次；信号时已有仓位，之后平仓也不反手。价格偏离超过max(0.5%, ATR/收盘价)跳过。</p></article><article><span>03 / 冻结预算</span><h3>50%计划预算与15倍名义上限</h3><p>每品种默认100U独立账本，当前权益可分别调整；预计损失包含开平手续费与不利执行成本，数量向下取整；不符合规则就放弃。成交超限只减仓，不补单、不追加、不放宽止损。</p></article><article><span>04 / 小时追踪</span><h3>5ATR初始、6ATR追踪</h3><p>追踪按交易所首次实际成交时间起算，排除该成交小时，从下一根完整小时线累计。替换保护先确认新单有效，再撤旧单。价格已越过新止损立即市价退出。</p></article><article><span>05 / 执行顺序</span><h3>已有保护 → 追踪 → EMA → 入场</h3><p>STOP_MARKET采用CONTRACT_PRICE、priceProtect=false，价格触发不等小时。趋势持仓多收盘&lt;EMA12、空&gt;EMA12；震荡持仓多收盘&gt;SMA30、空&lt;SMA30。相等不退出，退出意图保持至确认平仓。</p></article><article><span>06 / 异常核对</span><h3>超时查询原订单，禁止盲目补单</h3><p>保护更新失败保留旧保护。无法确认任何有效保护则处理剩余开仓委托、退出已确认持仓；完成成交、费用和真实状态核对后按原启停意图自动继续。重启先核对真实仓位、普通单和条件单。</p></article></div><div class="small-note">旧研究报告和旧收益属于已退役策略，当前页面不将它们作为新策略验证结果。新成交、调整费用和风险偏离均保留记录。</div></section>
     <section class="panel events"><div class="panel-heading"><h2>运行事件</h2><small>版本：{{worker.software_release||'待核对'}} · 最近读取：{{snapshot?.updated_at||'等待读取'}}</small></div><div v-for="e in [...(worker.events||[]),...(snapshot?.events||[])].slice(0,30)" class="event"><time>{{eventTime(e)}}</time><span>{{eventText(e)}}</span></div><div v-if="worker.unknown_orders?.length" class="small-note">存在 {{worker.unknown_orders.length}} 个状态未确定订单，新开仓保持关闭。</div></section><footer>127.0.0.1:8788 · BTC / ETH USDT本位永续 · 币安正式接口</footer>
+<footer class="author-signature"><button id="authorSignature" @click="authorDialog?.showModal()" type="button" aria-haspopup="dialog">作者QQ：230154231</button></footer>
+<dialog id="authorDialog" ref="authorDialog" class="author-dialog" aria-labelledby="authorText">
+  <p id="authorText">作者QQ：230154231</p>
+  <form method="dialog"><button autofocus>关闭</button></form>
+</dialog>
   </main>
 </div>
 </template>
 
 <style scoped>
+
+.author-signature{display:block;text-align:center;padding:16px;margin:8px auto;color:inherit}
+.author-signature button{font:inherit;color:inherit;background:transparent;border:0;cursor:pointer;padding:6px 10px;text-decoration:underline;text-underline-offset:4px}
+dialog.author-dialog{position:fixed;inset:0;margin:auto;box-sizing:border-box;width:min(360px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:28px;border:1px solid #cbd5e1;border-radius:16px;background:#fff;color:#17221e;box-shadow:0 24px 80px #0004;text-align:center}
+dialog.author-dialog::backdrop{background:rgba(15,23,42,.45)}
+dialog.author-dialog p{font-size:20px;font-weight:600;line-height:1.6;margin:0 0 24px;color:inherit}
+dialog.author-dialog button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:10px 28px;background:#2563eb;color:white}
+
 .equity-controls{margin-top:12px}.equity-controls form{display:flex;flex-direction:column;gap:10px}.equity-controls input{width:100%;box-sizing:border-box;padding:10px;border:1px solid #41506a;border-radius:6px;background:#101a2b;color:#e9eff8;font-size:16px}.equity-controls form>div{display:flex;gap:8px;flex-wrap:wrap}.equity-controls button{margin:0}.equity-controls small{display:block;line-height:1.6;overflow-wrap:anywhere}.equity-controls p{font-size:13px;line-height:1.6}.strategy-balances{grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:760px){.strategy-balances{grid-template-columns:1fr}}
 </style>
